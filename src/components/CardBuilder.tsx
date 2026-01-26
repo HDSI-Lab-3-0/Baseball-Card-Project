@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { teams } from '../data/teams';
 import BaseballCard from './BaseballCard';
 
-const sampleStats = {
+const defaultStats = {
   nickname: 'The Snack King',
   position: 'Designated Viber',
   stats: { AVG: '.342', HR: '24', RBI: '89', VIBES: '💯', DRIP: '95', CLUTCH: '88%' },
@@ -15,6 +15,10 @@ export default function CardBuilder() {
   const [team, setTeam] = useState('Dodgers');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const [generatedStats, setGeneratedStats] = useState(defaultStats);
+  const [frontCardUrl, setFrontCardUrl] = useState<string | null>(null);
+  const [backCardUrl, setBackCardUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,9 +100,13 @@ export default function CardBuilder() {
      CARD GENERATION
   ================================= */
   const handleGenerate = async () => {
-    if (!playerImage) return;
+    if (!playerImage || !playerName.trim()) {
+      setError('Please upload a photo and provide a player name.');
+      return;
+    }
 
     setIsGenerating(true);
+    setError(null);
 
     try {
       const response = await fetch('/api/generate-card', {
@@ -107,20 +115,25 @@ export default function CardBuilder() {
         body: JSON.stringify({
           imageBase64: playerImage,
           team,
-          playerName: playerName || undefined,
+          playerName: playerName.trim(),
         }),
       });
 
       const data = await response.json();
 
-      if (response.ok && data.stats) {
-        sampleStats.nickname = data.stats.nickname;
-        sampleStats.position = data.stats.position;
-        sampleStats.stats = data.stats.stats;
-        sampleStats.funFact = data.stats.funFact;
+      if (!response.ok) {
+        throw new Error(data?.error || 'Generation failed');
+      }
+
+      if (data.frontCard) setFrontCardUrl(data.frontCard);
+      if (data.backCard) setBackCardUrl(data.backCard);
+
+      if (data.stats) {
+        setGeneratedStats(data.stats);
       }
     } catch (err) {
       console.error('API error:', err);
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
     }
 
     setIsGenerating(false);
@@ -128,7 +141,7 @@ export default function CardBuilder() {
   };
 
   const displayStats = generated
-    ? sampleStats.stats
+    ? generatedStats.stats
     : { AVG: '---', HR: '--', RBI: '--', VIBES: '???', DRIP: '--', CLUTCH: '--' };
 
   /* ================================
@@ -191,7 +204,7 @@ export default function CardBuilder() {
         {/* NAME INPUT */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
-            Name <span className="text-gray-500">(optional)</span>
+            Name <span className="text-red-400">(required)</span>
           </label>
           <input
             type="text"
@@ -221,9 +234,9 @@ export default function CardBuilder() {
         {/* GENERATE BUTTON */}
         <button
           onClick={handleGenerate}
-          disabled={!playerImage || isGenerating}
+          disabled={!playerImage || !playerName.trim() || isGenerating}
           className={`w-full py-3 rounded-lg font-bold text-lg transition ${
-            !playerImage || isGenerating
+            !playerImage || !playerName.trim() || isGenerating
               ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
               : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white'
           }`}
@@ -231,25 +244,56 @@ export default function CardBuilder() {
           {isGenerating ? 'Generating…' : '✨ Generate Card'}
         </button>
 
+        {error && (
+          <div className="p-3 bg-red-900/30 border border-red-700 rounded-lg text-red-200 text-sm">
+            {error}
+          </div>
+        )}
+
         {generated && (
           <div className="p-3 bg-blue-900/30 border border-blue-700 rounded-lg text-blue-200 text-sm">
-            <strong>Fun Fact:</strong> {sampleStats.funFact}
+            <strong>Fun Fact:</strong> {generatedStats.funFact}
           </div>
         )}
       </div>
 
-      {/* CARD PREVIEW */}
-      <div className="flex flex-col items-center gap-4">
-        <h2 className="text-xl font-bold text-white">Your Card</h2>
-        <BaseballCard
-          playerImage={playerImage}
-          playerName={generated ? sampleStats.nickname : playerName || 'Player Name'}
-          team={team}
-          colors={colors}
-          position={generated ? sampleStats.position : 'TBD'}
-          number="42"
-          stats={displayStats}
-        />
+      <div className="flex flex-col items-center gap-6 w-full lg:flex-1">
+        <div className="flex flex-col items-center gap-4 w-full">
+          <h2 className="text-xl font-bold text-white">Design Preview</h2>
+          <BaseballCard
+            playerImage={playerImage}
+            playerName={generated ? generatedStats.nickname : playerName || 'Player Name'}
+            team={team}
+            colors={colors}
+            position={generated ? generatedStats.position : 'TBD'}
+            number="42"
+            stats={displayStats}
+          />
+        </div>
+
+        {generated && (frontCardUrl || backCardUrl) && (
+          <div className="w-full bg-gray-900/70 border border-gray-700 rounded-xl p-4 space-y-4">
+            <h3 className="text-lg font-semibold text-white">AI-Composited Card</h3>
+            <p className="text-sm text-gray-400">
+              These images come directly from the Gemini model with your uploaded photo and stats applied to the official templates.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {frontCardUrl && (
+                <figure className="space-y-2">
+                  <img src={frontCardUrl} alt="Generated card front" className="w-full rounded-lg border border-gray-700" />
+                  <figcaption className="text-center text-sm text-gray-300">Front</figcaption>
+                </figure>
+              )}
+              {backCardUrl && (
+                <figure className="space-y-2">
+                  <img src={backCardUrl} alt="Generated card back" className="w-full rounded-lg border border-gray-700" />
+                  <figcaption className="text-center text-sm text-gray-300">Back</figcaption>
+                </figure>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
