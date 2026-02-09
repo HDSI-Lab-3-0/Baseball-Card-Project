@@ -8,6 +8,13 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const FRONT_TEMPLATE_PATH = fileURLToPath(new URL('../../../public/template/front.png', import.meta.url));
 const BACK_TEMPLATE_PATH = fileURLToPath(new URL('../../../public/template/stats.png', import.meta.url));
 
+// Validated Cheap/Best Model for Image Editing (Feb 2026)
+// Supports: Image+Text Input -> Image Output
+const IMG_MODEL = 'google/gemini-2.5-flash-image'; 
+
+// Cheap Text Model for Health Checks
+const TEXT_MODEL = 'google/gemini-2.5-flash-image';
+
 const templateCache: Record<'front' | 'back', string | null> = {
   front: null,
   back: null,
@@ -68,20 +75,29 @@ const extractImageUrl = (completion: any): string | null => {
   const message = completion?.choices?.[0]?.message;
   if (!message) return null;
 
+  // Handle standard OpenAI-style image response
   if (Array.isArray(message.images) && message.images.length > 0) {
     return message.images[0]?.image_url?.url ?? null;
   }
 
+  // Handle Gemini/OpenRouter specific content arrays
   const content = message.content;
   if (Array.isArray(content)) {
     for (const part of content) {
+      // Check for native output_image type
       if (part?.type === 'output_image' && part?.image_url?.url) {
         return part.image_url.url;
       }
+      // Check for inline data URLs in standard image_url type
       if (part?.type === 'image_url' && part?.image_url?.url?.startsWith('data:')) {
         return part.image_url.url;
       }
     }
+  }
+
+  // Fallback: Check if the text content itself is a URL (rare but possible)
+  if (typeof content === 'string' && content.startsWith('http')) {
+      return content;
   }
 
   return null;
@@ -107,7 +123,7 @@ const callGemini = async (payload: Record<string, unknown>) => {
   const image = extractImageUrl(result);
 
   if (!image) {
-    throw new Error('Model response did not contain an image');
+    throw new Error('Model response did not contain an image. API output: ' + JSON.stringify(result));
   }
 
   return image;
@@ -117,16 +133,21 @@ const buildFrontPayload = async ({
   playerImage,
   playerName,
   team,
+  promptOverride,
 }: {
   playerImage: string;
   playerName: string;
   team: string;
+  promptOverride?: string;
 }) => {
   const templateFront = await loadTemplate('front');
   const jerseyNumber = randomInRange(1, 98);
+  const promptText =
+    promptOverride?.trim() ||
+    `Use this template as the base design. Replace the portrait with the supplied player photo and update the name banner to "${playerName}" with the same typography. Set the team stripe to "${team}" and show jersey number #${jerseyNumber}. Do not change colors, borders, or layout. Return only the finished card front as a high-resolution image.`;
 
   return {
-    model: 'google/gemini-2.5-flash-image',
+    model: IMG_MODEL,
     modalities: ['image', 'text'],
     messages: [
       {
@@ -139,7 +160,7 @@ const buildFrontPayload = async ({
         content: [
           {
             type: 'text',
-            text: `Use this template as the base design. Replace the portrait with the supplied player photo and update the name banner to "${playerName}" with the same typography. Set the team stripe to "${team}" and show jersey number #${jerseyNumber}. Do not change colors, borders, or layout. Return only the finished card front as a high-resolution image.`,
+            text: promptText,
           },
           { type: 'image_url', image_url: { url: templateFront } },
           { type: 'image_url', image_url: { url: ensureDataUrl(playerImage) } },
@@ -153,17 +174,22 @@ const buildFrontPayload = async ({
 const buildBackPayload = async ({
   stats,
   playerName,
+  promptOverride,
 }: {
   stats: ReturnType<typeof generateRandomStats>['stats'];
   playerName: string;
+  promptOverride?: string;
 }) => {
   const templateBack = await loadTemplate('back');
   const statLines = Object.entries(stats)
     .map(([label, value]) => `${label}: ${value}`)
     .join('\n');
+  const promptText =
+    promptOverride?.trim() ||
+    `Update every location that shows the player name to "${playerName}" (including the header plaque and stat table). Overlay these updated stat values into the matching rows while keeping kerning, column alignment, and font weights identical. Do not introduce any new stat categories—only replace the numbers that already exist in the template. Rewrite the "Season Highlights" paragraph with a fresh, custom description that references the player's unstoppable vibes while staying on-brand with the design. Maintain all other typography from the template.\n\n${statLines}\n\nAdd a short quip in the note section about the player having unstoppable vibes. Return only the finished card back image.`;
 
   return {
-    model: 'google/gemini-2.5-flash-image',
+    model: IMG_MODEL,
     modalities: ['image', 'text'],
     messages: [
       {
@@ -176,43 +202,78 @@ const buildBackPayload = async ({
         content: [
           {
             type: 'text',
-            text: `Update every location that shows the player name to "${playerName}" (including the header plaque and stat table). Overlay these updated stat values into the matching rows while keeping kerning, column alignment, and font weights identical. Do not introduce any new stat categories—only replace the numbers that already exist in the template. Rewrite the "Season Highlights" paragraph with a fresh, custom description that references the player's unstoppable vibes while staying on-brand with the design. Maintain all other typography from the template.\n\n${statLines}\n\nAdd a short quip in the note section about the player having unstoppable vibes. Return only the finished card back image.`,
+            text: promptText,
           },
           { type: 'image_url', image_url: { url: templateBack } },
         ],
       },
     ],
     image_config: { aspect_ratio: '3:4' },
-    effort: 'high',
+    effort: 'xhigh',
   };
 };
 
 export const POST: APIRoute = async ({ request }) => {
   try {
-    const { imageBase64, team, playerName } = await request.json();
+    const body = await request.json();
+    const side = (body?.side ?? 'front').toLowerCase();
+    const playerName = body?.playerName?.trim();
 
-    if (!imageBase64 || !team || !playerName) {
-      return new Response(JSON.stringify({ error: 'Missing photo, team, or name' }), {
+    if (!playerName) {
+      return new Response(JSON.stringify({ error: 'Player name is required.' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-    const statsTemplate = generateRandomStats();
+    if (side !== 'front' && side !== 'back') {
+      return new Response(JSON.stringify({ error: "'side' must be either 'front' or 'back'." }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
-    const [frontCard, backCard] = await Promise.all([
-      callGemini(await buildFrontPayload({
-        playerImage: imageBase64,
+    if (side === 'front') {
+      const { imageBase64, team, frontPrompt, prompt } = body;
+
+      if (!imageBase64 || !team) {
+        return new Response(JSON.stringify({ error: 'Front generation needs photo and team.' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      const frontCard = await callGemini(
+        await buildFrontPayload({
+          playerImage: imageBase64,
+          playerName,
+          team,
+          promptOverride: frontPrompt ?? prompt,
+        })
+      );
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          frontCard,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const statsTemplate = generateRandomStats();
+    const { backPrompt, prompt } = body;
+    const backCard = await callGemini(
+      await buildBackPayload({
+        stats: statsTemplate.stats,
         playerName,
-        team,
-      })),
-      callGemini(await buildBackPayload({ stats: statsTemplate.stats, playerName })),
-    ]);
+        promptOverride: backPrompt ?? prompt,
+      })
+    );
 
     return new Response(
       JSON.stringify({
         success: true,
-        frontCard,
         backCard,
         stats: statsTemplate,
       }),
@@ -236,8 +297,7 @@ export const GET: APIRoute = async () => {
       method: 'POST',
       headers: baseHeaders(),
       body: JSON.stringify({
-        model: 'google/gemini-3-pro-image-preview',
-        modalities: ['text'],
+        model: TEXT_MODEL, // Switched to cheaper text-only model
         messages: [{ role: 'user', content: 'Reply with: API ready.' }],
       }),
     });
