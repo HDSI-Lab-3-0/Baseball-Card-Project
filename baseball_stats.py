@@ -14,8 +14,7 @@ else:
 prev_center = None
 prev_time = None
 
-# Real-world calibration (meters per pixel)
-meters_per_pixel = 0.01  # adjust based on your setup
+meters_per_pixel = 0.01  # adjust based on setup
 
 while True:
     ret, frame = cap.read()
