@@ -1,3 +1,4 @@
+//baseballcard.tsx
 // Import the TeamColors type definition from our data file
 import type { TeamColors } from '../data/teams';
 
@@ -166,7 +167,7 @@ export default function BaseballCard({ playerImage, playerName, team, colors, po
       {/* ===== STATS GRID ===== */}
       {/* Bottom section showing all the player stats */}
       <div
-        className="absolute bottom-3 left-4 right-4 rounded-lg p-2"
+        className="absolute bottom-9 left-4 right-4 rounded-lg p-2"
         // bottom-3: 12px from bottom
         // left-4 right-4: 16px margins on sides
         // p-2: 8px padding inside
