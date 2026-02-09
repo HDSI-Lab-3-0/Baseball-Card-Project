@@ -3,23 +3,6 @@ import type { APIRoute } from 'astro';
 export const prerender = false;
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-<<<<<<< HEAD
-const FRONT_TEMPLATE_PATH = fileURLToPath(new URL('../../../public/template/front.png', import.meta.url));
-const BACK_TEMPLATE_PATH = fileURLToPath(new URL('../../../public/template/stats.png', import.meta.url));
-
-// Validated Cheap/Best Model for Image Editing (Feb 2026)
-// Supports: Image+Text Input -> Image Output
-const IMG_MODEL = 'google/gemini-2.5-flash-image'; 
-
-// Cheap Text Model for Health Checks
-const TEXT_MODEL = 'google/gemini-2.5-flash-image';
-
-const templateCache: Record<'front' | 'back', string | null> = {
-  front: null,
-  back: null,
-};
-=======
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
 
 const baseHeaders = () => {
   const headers: Record<string, string> = {
@@ -68,20 +51,12 @@ const extractImageUrl = (completion: any): string | null => {
   const message = completion?.choices?.[0]?.message;
   if (!message) return null;
 
-<<<<<<< HEAD
-  // Handle standard OpenAI-style image response
-=======
   // Check for images array
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
   if (Array.isArray(message.images) && message.images.length > 0) {
     return message.images[0]?.image_url?.url ?? null;
   }
 
-<<<<<<< HEAD
-  // Handle Gemini/OpenRouter specific content arrays
-=======
   // Check content array for various image formats
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
   const content = message.content;
   if (Array.isArray(content)) {
     for (const part of content) {
@@ -174,111 +149,13 @@ Generate the stylized portrait image now.`,
   const image = extractImageUrl(result);
 
   if (!image) {
-<<<<<<< HEAD
-    throw new Error('Model response did not contain an image. API output: ' + JSON.stringify(result));
-=======
     console.warn('Model did not return a stylized image, using original');
     return imageBase64;
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
   }
 
   return image;
 };
 
-<<<<<<< HEAD
-const buildFrontPayload = async ({
-  playerImage,
-  playerName,
-  team,
-  promptOverride,
-}: {
-  playerImage: string;
-  playerName: string;
-  team: string;
-  promptOverride?: string;
-}) => {
-  const templateFront = await loadTemplate('front');
-  const jerseyNumber = randomInRange(1, 98);
-  const promptText =
-    promptOverride?.trim() ||
-    `Use this template as the base design. Replace the portrait with the supplied player photo and update the name banner to "${playerName}" with the same typography. Set the team stripe to "${team}" and show jersey number #${jerseyNumber}. Do not change colors, borders, or layout. Return only the finished card front as a high-resolution image.`;
-
-  return {
-    model: IMG_MODEL,
-    modalities: ['image', 'text'],
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are a premium baseball card designer. Preserve every decorative element from the template image while swapping in the provided player photo and overlaying the requested text in matching fonts and placements.',
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: promptText,
-          },
-          { type: 'image_url', image_url: { url: templateFront } },
-          { type: 'image_url', image_url: { url: ensureDataUrl(playerImage) } },
-        ],
-      },
-    ],
-    image_config: { aspect_ratio: '3:4' },
-  };
-};
-
-const buildBackPayload = async ({
-  stats,
-  playerName,
-  promptOverride,
-}: {
-  stats: ReturnType<typeof generateRandomStats>['stats'];
-  playerName: string;
-  promptOverride?: string;
-}) => {
-  const templateBack = await loadTemplate('back');
-  const statLines = Object.entries(stats)
-    .map(([label, value]) => `${label}: ${value}`)
-    .join('\n');
-  const promptText =
-    promptOverride?.trim() ||
-    `Update every location that shows the player name to "${playerName}" (including the header plaque and stat table). Overlay these updated stat values into the matching rows while keeping kerning, column alignment, and font weights identical. Do not introduce any new stat categories—only replace the numbers that already exist in the template. Rewrite the "Season Highlights" paragraph with a fresh, custom description that references the player's unstoppable vibes while staying on-brand with the design. Maintain all other typography from the template.\n\n${statLines}\n\nAdd a short quip in the note section about the player having unstoppable vibes. Return only the finished card back image.`;
-
-  return {
-    model: IMG_MODEL,
-    modalities: ['image', 'text'],
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You edit baseball card backs. Replace only the name, stat numbers, the season highlights paragraph, and descriptive blurb while preserving the template colors, layout, logos, and texture. Make sure it is very accurate',
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: promptText,
-          },
-          { type: 'image_url', image_url: { url: templateBack } },
-        ],
-      },
-    ],
-    image_config: { aspect_ratio: '3:4' },
-    effort: 'xhigh',
-  };
-};
-
-export const POST: APIRoute = async ({ request }) => {
-  try {
-    const body = await request.json();
-    const side = (body?.side ?? 'front').toLowerCase();
-    const playerName = body?.playerName?.trim();
-
-    if (!playerName) {
-      return new Response(JSON.stringify({ error: 'Player name is required.' }), {
-=======
 export const POST: APIRoute = async ({ request }) => {
   try {
     const body = await request.json();
@@ -289,51 +166,18 @@ export const POST: APIRoute = async ({ request }) => {
 
     if (!team || !playerName) {
       return new Response(JSON.stringify({ error: 'Missing team or name' }), {
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-<<<<<<< HEAD
-    if (side !== 'front' && side !== 'back') {
-      return new Response(JSON.stringify({ error: "'side' must be either 'front' or 'back'." }), {
-=======
     if (!imageBase64) {
       return new Response(JSON.stringify({ error: 'Missing player image' }), {
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
     }
 
-<<<<<<< HEAD
-    if (side === 'front') {
-      const { imageBase64, team, frontPrompt, prompt } = body;
-
-      if (!imageBase64 || !team) {
-        return new Response(JSON.stringify({ error: 'Front generation needs photo and team.' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      const frontCard = await callGemini(
-        await buildFrontPayload({
-          playerImage: imageBase64,
-          playerName,
-          team,
-          promptOverride: frontPrompt ?? prompt,
-        })
-      );
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          frontCard,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-=======
     if (playerName.length > 50) {
       return new Response(
         JSON.stringify({ error: 'Player name too long (max 50 characters)' }),
@@ -345,32 +189,16 @@ export const POST: APIRoute = async ({ request }) => {
       return new Response(
         JSON.stringify({ error: 'Team name too long (max 30 characters)' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
       );
     }
 
     const statsTemplate = generateRandomStats();
-<<<<<<< HEAD
-    const { backPrompt, prompt } = body;
-    const backCard = await callGemini(
-      await buildBackPayload({
-        stats: statsTemplate.stats,
-        playerName,
-        promptOverride: backPrompt ?? prompt,
-      })
-    );
-=======
     const stylizedImage = await stylizePlayerPhoto(imageBase64, playerName, team);
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
 
     return new Response(
       JSON.stringify({
         success: true,
-<<<<<<< HEAD
-        backCard,
-=======
         stylizedImage,
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
         stats: statsTemplate,
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -388,36 +216,6 @@ export const POST: APIRoute = async ({ request }) => {
 };
 
 export const GET: APIRoute = async () => {
-<<<<<<< HEAD
-  try {
-    const response = await fetch(OPENROUTER_API_URL, {
-      method: 'POST',
-      headers: baseHeaders(),
-      body: JSON.stringify({
-        model: TEXT_MODEL, // Switched to cheaper text-only model
-        messages: [{ role: 'user', content: 'Reply with: API ready.' }],
-      }),
-    });
-
-    const data = await response.json();
-
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: data?.choices?.[0]?.message?.content ?? 'API ready.',
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
-  } catch (error) {
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
-=======
   return new Response(
     JSON.stringify({
       success: true,
@@ -425,5 +223,4 @@ export const GET: APIRoute = async () => {
     }),
     { status: 200, headers: { 'Content-Type': 'application/json' } }
   );
->>>>>>> 8b04ffc (Add baseball webcam stats script and update frontend components)
 };
