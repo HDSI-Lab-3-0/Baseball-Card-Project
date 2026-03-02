@@ -2,94 +2,100 @@ import cv2
 import time
 import numpy as np
 
+# =========================
+# USER SETTINGS
+# =========================
+REAL_DISTANCE_FEET = 10    # Real distance between the two lines
+LINE1_X = 300              # X-position of first line in frame
+LINE2_X = 700              # X-position of second line in frame
+MIN_RADIUS = 15            # Minimum radius to consider a detection
+# =========================
 
 cap = cv2.VideoCapture(0)
 
-
 if not cap.isOpened():
-   print("Cannot open camera")
-   exit()
+    print("Cannot open camera")
+    exit()
 else:
-   print("Camera opened successfully!")
-
+    print("Camera opened successfully!")
 
 prev_center = None
-prev_time = None
-max_speed = 0
-
-
-meters_per_pixel = 0.01
-MIN_PIXEL_MOVEMENT = 15  # ignore movements smaller than this
-
+cross_time_1 = None
+cross_time_2 = None
+pitch_speed = None
 
 while True:
-   ret, frame = cap.read()
-   if not ret:
-       break
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
 
+    # Convert frame to HSV for green detection
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_green = np.array([35, 80, 80])
+    upper_green = np.array([85, 255, 255])
+    mask = cv2.inRange(hsv, lower_green, upper_green)
+    mask = cv2.GaussianBlur(mask, (7, 7), 0)  # reduce noise
 
-   hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Find contours
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if contours:
+        # Take the largest contour
+        c = max(contours, key=cv2.contourArea)
+        ((x, y), radius) = cv2.minEnclosingCircle(c)
 
+        if radius > MIN_RADIUS:
+            center = (int(x), int(y))
+            current_x = center[0]
 
-   lower_green = np.array([35, 80, 80])
-   upper_green = np.array([85, 255, 255])
-   mask = cv2.inRange(hsv, lower_green, upper_green)
+            # Draw the detected ball
+            cv2.circle(frame, center, int(radius), (0, 255, 0), 2)
 
+            if prev_center is not None:
+                prev_x = prev_center[0]
 
-   contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                # Detect crossing of first line
+                if cross_time_1 is None and prev_x < LINE1_X <= current_x:
+                    cross_time_1 = time.time()
+                    print("Crossed Line 1")
 
+                # Detect crossing of second line
+                elif cross_time_2 is None and prev_x < LINE2_X <= current_x:
+                    cross_time_2 = time.time()
+                    print("Crossed Line 2")
 
-   if contours:
-       c = max(contours, key=cv2.contourArea)
-       ((x, y), radius) = cv2.minEnclosingCircle(c)
+                    # Calculate speed
+                    dt = cross_time_2 - cross_time_1
+                    if dt > 0:
+                        speed_fps = REAL_DISTANCE_FEET / dt
+                        pitch_speed = speed_fps * 0.6818  # ft/s to mph
+                        print(f"PITCH SPEED: {pitch_speed:.1f} mph")
 
+                    # Reset for next pitch
+                    cross_time_1 = None
+                    cross_time_2 = None
 
-       if radius > 20:
-           center = (int(x), int(y))
-           cv2.circle(frame, center, int(radius), (0, 255, 0), 2)
+            prev_center = center
 
+    # Draw the timing lines on screen
+    cv2.line(frame, (LINE1_X, 0), (LINE1_X, frame.shape[0]), (255, 0, 0), 2)
+    cv2.line(frame, (LINE2_X, 0), (LINE2_X, frame.shape[0]), (0, 0, 255), 2)
 
-           if prev_center is not None and prev_time is not None:
-               dx = center[0] - prev_center[0]
-               dy = center[1] - prev_center[1]
-               dist_pixels = np.sqrt(dx**2 + dy**2)
-               
-               # Only calculate speed if ball moved enough
-               if dist_pixels > MIN_PIXEL_MOVEMENT:
-                   dist_meters = dist_pixels * meters_per_pixel
-                   dt = time.time() - prev_time
-                   speed_mps = dist_meters / dt
-                   speed_mph = speed_mps * 2.237
-                   
-                   print(f"Speed: {speed_mph:.1f} mph | Position: ({center[0]}, {center[1]}) | Radius: {radius:.0f}px")
-                   
-                   if speed_mph > max_speed:
-                       max_speed = speed_mph
-                       print(f">>> NEW MAX: {max_speed:.1f} mph <<<")
-                   
-                   cv2.putText(frame, f"{speed_mph:.1f} mph", (50, 50),
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                   
-                   # Only update prev values when there's real movement
-                   prev_center = center
-                   prev_time = time.time()
-               else:
-                   cv2.putText(frame, "Stationary", (50, 50),
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 2)
-           else:
-               prev_center = center
-               prev_time = time.time()
-           
-           cv2.putText(frame, f"Max: {max_speed:.1f} mph", (50, 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+    # Display pitch speed
+    if pitch_speed is not None:
+        cv2.putText(frame, f"{pitch_speed:.1f} mph",
+                    (50, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5,
+                    (0, 255, 255),
+                    3)
 
+    cv2.imshow("Pitch Speed Tracker", frame)
 
-   cv2.imshow('Ball Tracking', frame)
+    # Press ESC to exit
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
 
-
-   if cv2.waitKey(1) & 0xFF == 27:
-       break
-
-print(f"\n=== SESSION MAX SPEED: {max_speed:.1f} mph ===")
 cap.release()
 cv2.destroyAllWindows()
