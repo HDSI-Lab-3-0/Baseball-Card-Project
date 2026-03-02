@@ -5,10 +5,8 @@ import numpy as np
 # =========================
 # USER SETTINGS
 # =========================
-REAL_DISTANCE_FEET = 10    # Real distance between the two lines
-LINE1_X = 300              # X-position of first line in frame
-LINE2_X = 700              # X-position of second line in frame
-MIN_RADIUS = 15            # Minimum radius to consider a detection
+REAL_DISTANCE_FEET = 10      # Distance between Line 1 and Line 2
+MIN_RADIUS = 15              # Minimum radius to detect ball
 # =========================
 
 cap = cv2.VideoCapture(0)
@@ -30,18 +28,24 @@ while True:
         print("Failed to grab frame")
         break
 
-    # Convert frame to HSV for green detection
+    frame_height, frame_width = frame.shape[:2]
+    mid_x = frame_width // 2
+
+    # Auto-center the timing lines relative to middle
+    LINE1_X = mid_x - frame_width // 6  # Start line (blue)
+    LINE2_X = mid_x + frame_width // 6  # End line (red)
+
+    # Convert frame to HSV for green ball detection
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     lower_green = np.array([35, 80, 80])
     upper_green = np.array([85, 255, 255])
     mask = cv2.inRange(hsv, lower_green, upper_green)
-    mask = cv2.GaussianBlur(mask, (7, 7), 0)  # reduce noise
+    mask = cv2.GaussianBlur(mask, (7, 7), 0)
 
     # Find contours
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     if contours:
-        # Take the largest contour
         c = max(contours, key=cv2.contourArea)
         ((x, y), radius) = cv2.minEnclosingCircle(c)
 
@@ -55,15 +59,15 @@ while True:
             if prev_center is not None:
                 prev_x = prev_center[0]
 
-                # Detect crossing of first line
+                # Line 1 crossing
                 if cross_time_1 is None and prev_x < LINE1_X <= current_x:
                     cross_time_1 = time.time()
-                    print("Crossed Line 1")
+                    print("Crossed Line 1 (Blue)")
 
-                # Detect crossing of second line
-                elif cross_time_2 is None and prev_x < LINE2_X <= current_x:
+                # Line 2 crossing only if Line 1 was crossed
+                elif cross_time_1 is not None and cross_time_2 is None and prev_x < LINE2_X <= current_x:
                     cross_time_2 = time.time()
-                    print("Crossed Line 2")
+                    print("Crossed Line 2 (Red)")
 
                     # Calculate speed
                     dt = cross_time_2 - cross_time_1
@@ -78,9 +82,10 @@ while True:
 
             prev_center = center
 
-    # Draw the timing lines on screen
-    cv2.line(frame, (LINE1_X, 0), (LINE1_X, frame.shape[0]), (255, 0, 0), 2)
-    cv2.line(frame, (LINE2_X, 0), (LINE2_X, frame.shape[0]), (0, 0, 255), 2)
+    # Draw timing lines
+    cv2.line(frame, (LINE1_X, 0), (LINE1_X, frame_height), (255, 0, 0), 3)  # Blue - Line 1
+    cv2.line(frame, (mid_x, 0), (mid_x, frame_height), (0, 255, 0), 2)      # Green - Center reference
+    cv2.line(frame, (LINE2_X, 0), (LINE2_X, frame_height), (0, 0, 255), 3)  # Red - Line 2
 
     # Display pitch speed
     if pitch_speed is not None:
@@ -93,7 +98,7 @@ while True:
 
     cv2.imshow("Pitch Speed Tracker", frame)
 
-    # Press ESC to exit
+    # ESC to exit
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
