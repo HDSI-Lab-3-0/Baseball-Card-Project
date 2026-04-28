@@ -1,12 +1,8 @@
 """
-Swing/Pitch Pose Tester — Raspberry Pi 5 version (USB webcam).
+Swing/Pitch Pose Tester — macOS development version.
 
-Same sandbox as test_swing.py, ported to run on a Pi 5 with a USB webcam.
-
-Setup on the Pi:
-    pip install opencv-python numpy tflite-runtime
-
-Make sure model.tflite is in the same directory as this script.
+Quick sandbox for testing MoveNet pose analysis on your Mac webcam
+before moving to the Raspberry Pi.
 
 Controls:
   SPACE — record a swing clip, analyze with swing metrics
@@ -23,17 +19,12 @@ from ai_edge_litert.interpreter import Interpreter
 # =========================
 # SETTINGS
 # =========================
-MODEL_PATH = "model.tflite"
-CLIP_SECONDS = 5.0
+MODEL_PATH = "model.tflite"        # rename your file to this, or change this
+CLIP_SECONDS = 5.0                  # longer window — easier to catch the motion
 MIN_KP_CONF = 0.3
 MIN_BALL_RADIUS = 15
-SHOW_BALL = True
-SAVE_HERO_FRAME = True
-
-# Pi-specific perf knobs — bump down if frame rate feels rough
-CAM_WIDTH = 640
-CAM_HEIGHT = 480
-POSE_EVERY_N_FRAMES = 1   # set to 2 if Pi 5 still struggles
+SHOW_BALL = True                    # flip off if green-ball noise is distracting
+SAVE_HERO_FRAME = True              # writes hero.jpg after each recording
 # =========================
 
 KEYPOINT_NAMES = [
@@ -53,7 +44,7 @@ print("MoveNet loaded.\n")
 
 
 # =========================
-# Pose + ball helpers (UNCHANGED from Mac version)
+# Pose + ball helpers
 # =========================
 
 def run_movenet(frame):
@@ -111,10 +102,11 @@ def detect_green_ball(frame):
 
 
 # =========================
-# Stat calculation (UNCHANGED from Mac version)
+# Stat calculation
 # =========================
 
 def norm(raw, lo, hi):
+    """Map a raw feature to the 75-99 kid-friendly range."""
     clamped = max(lo, min(raw, hi))
     return int(75 + ((clamped - lo) / (hi - lo)) * 24)
 
@@ -131,8 +123,16 @@ def peak_wrist_velocity(pose_frames):
 
 
 def _axis_angle_range(angles_deg):
+    """Max sweep of a set of axis angles (mod 180°).
+
+    Treats angles as undirected lines — so 10° and 190° are the same axis.
+    This avoids noise from MoveNet flipping 'which hip came first'.
+    """
     if not angles_deg:
         return 0.0
+    # Double the angles so they span 0-360, then do the normal circular math.
+    # A 180° axis sweep becomes a 360° circular sweep, a 10° axis sweep → 20° circular.
+    # At the end we halve it back.
     doubled = [2 * a for a in angles_deg]
     rads = np.radians(doubled)
     xs = np.cos(rads)
@@ -145,7 +145,7 @@ def _axis_angle_range(angles_deg):
             sweep = np.degrees(np.arccos(dot))
             if sweep > max_sweep:
                 max_sweep = sweep
-    return max_sweep / 2
+    return max_sweep / 2  # halve back to axis space
 
 
 def hip_rotation_range(pose_frames):
@@ -156,7 +156,6 @@ def hip_rotation_range(pose_frames):
             angles.append(np.degrees(np.arctan2(rh[1] - lh[1], rh[0] - lh[0])))
     return _axis_angle_range(angles)
 
-
 def max_shoulder_hip_separation(pose_frames):
     peak = 0.0
     for f in pose_frames:
@@ -165,6 +164,7 @@ def max_shoulder_hip_separation(pose_frames):
         if ls and rs and lh and rh:
             sa = np.arctan2(rs[1] - ls[1], rs[0] - ls[0])
             ha = np.arctan2(rh[1] - lh[1], rh[0] - lh[0])
+            # Axis difference: double, compare on circle, halve back
             diff = np.arctan2(np.sin(2 * (sa - ha)), np.cos(2 * (sa - ha))) / 2
             peak = max(peak, abs(np.degrees(diff)))
     return peak
@@ -204,7 +204,7 @@ def peak_leg_kick(pose_frames):
             hip = kp(f, f"{side}_hip")
             knee = kp(f, f"{side}_knee")
             if hip and knee:
-                peak = max(peak, hip[1] - knee[1])
+                peak = max(peak, hip[1] - knee[1])  # positive = knee above hip
     return peak
 
 
@@ -239,7 +239,7 @@ def analyze(pose_frames, mode):
             "FORM":      norm(features["max_separation"], 5, 40),
             "STYLE":     norm(features["max_spread"], 0.05, 0.35),
         }
-    else:
+    else:  # pitch
         features = {
             "peak_arm_extension":      peak_arm_extension(pose_frames),
             "peak_leg_kick":           peak_leg_kick(pose_frames),
@@ -278,17 +278,14 @@ def pick_hero_frame(frames, pose_frames):
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("Cannot open camera. On the Pi, check:")
-        print("  1. USB webcam is plugged in (try `lsusb` to confirm)")
-        print("  2. Device exists at /dev/video0 (try `ls /dev/video*`)")
-        print("  3. Your user is in the 'video' group (`groups` should list it)")
+        print("Cannot open camera. Check macOS camera permissions for VS Code/Terminal.")
         return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
-    cap.set(cv2.CAP_PROP_FPS, 30)
+    # Mac webcams often default to 1280x720 — drop to 640x480 for speed
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    print(f"Camera opened at {CAM_WIDTH}x{CAM_HEIGHT}.")
+    print("Camera opened.")
     print("Controls: SPACE = swing, P = pitch, ESC = quit")
 
     recording = False
@@ -296,15 +293,8 @@ def main():
     record_start_time = 0.0
     recorded_frames = []
     recorded_poses = []
-    last_keypoints = None
-    frame_count = 0
 
-    # FPS tracker — useful when tuning Pi performance
-    fps_t0 = time.time()
-    fps_frames = 0
-    fps_display = 0.0
-
-    window_name = "Pose Tester (Pi)"
+    window_name = "Pose Tester"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     while True:
@@ -312,30 +302,17 @@ def main():
         if not ret:
             break
 
+        # Mirror the frame so it feels like a mirror, not a reversed video
         frame = cv2.flip(frame, 1)
 
-        # Run pose every N frames; reuse last result on skipped frames
-        if frame_count % POSE_EVERY_N_FRAMES == 0:
-            last_keypoints = run_movenet(frame)
-        keypoints = last_keypoints
-        frame_count += 1
-
-        if keypoints is not None:
-            draw_pose(frame, keypoints)
+        keypoints = run_movenet(frame)
+        draw_pose(frame, keypoints)
 
         if SHOW_BALL:
             ball = detect_green_ball(frame)
             if ball:
                 center, radius = ball
                 cv2.circle(frame, center, radius, (0, 255, 0), 2)
-
-        # FPS calc
-        fps_frames += 1
-        if fps_frames >= 30:
-            now = time.time()
-            fps_display = fps_frames / (now - fps_t0)
-            fps_t0 = now
-            fps_frames = 0
 
         if recording:
             recorded_frames.append(frame.copy())
@@ -366,17 +343,15 @@ def main():
         else:
             cv2.putText(frame, "SPACE = swing   P = pitch   ESC = quit",
                         (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(frame, f"{fps_display:.1f} FPS",
-                        (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
         cv2.imshow(window_name, frame)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:
+        if key == 27:  # ESC
             break
         if recording:
             continue
-        if key == 32:
+        if key == 32:  # SPACE
             record_mode = "swing"
         elif key == ord("p"):
             record_mode = "pitch"
