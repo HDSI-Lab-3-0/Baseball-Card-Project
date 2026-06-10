@@ -1,0 +1,28 @@
+PRIVACY POLICY
+
+We respect your privacy at this photobooth kiosk.
+
+What we collect:
+- Your first name (as entered)
+- A selfie photograph
+- Motion data (when enabled) used to generate gameplay statistics
+- Generated card images
+
+How we use it:
+- To create your personalized baseball card and final composite image
+- To provide a QR code download link on the local network
+
+Storage:
+- Files are saved in a local folder on this machine
+- No cloud database is used in this kiosk configuration
+- Session files may be deleted by the operator at any time
+
+Sharing:
+- We do not sell your data
+- Images are not uploaded unless AI stylization is enabled (sent to OpenRouter for processing only)
+
+Your rights:
+- You may decline to participate at any time before capture
+- Ask staff to delete your session folder after download
+
+Contact the event operator for questions about data handling at this venue.

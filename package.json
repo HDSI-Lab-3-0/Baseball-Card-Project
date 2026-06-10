@@ -7,7 +7,12 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "kiosk:install": "python3 -m venv photobooth-kiosk/.venv && photobooth-kiosk/.venv/bin/pip install -r photobooth-kiosk/requirements.txt",
+    "kiosk": "photobooth-kiosk/.venv/bin/python photobooth-kiosk/main.py",
+    "kiosk:fullscreen": "photobooth-kiosk/.venv/bin/python photobooth-kiosk/main.py --fullscreen",
+    "kiosk:dev": "KIOSK_DEV=1 photobooth-kiosk/.venv/bin/python photobooth-kiosk/main.py",
+    "kiosk:build": "cd photobooth-kiosk && .venv/bin/pip install -q pyinstaller && .venv/bin/pyinstaller build/photobooth.spec"
   },
   "dependencies": {
     "@astrojs/node": "^8.3.0",

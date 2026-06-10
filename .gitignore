@@ -27,3 +27,9 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Python photobooth kiosk
+photobooth-kiosk/output/
+photobooth-kiosk/.venv/
+photobooth-kiosk/dist/
+photobooth-kiosk/build/BaseballCardKiosk/

@@ -1,0 +1,20 @@
+[project]
+name = "baseball-card-photobooth"
+version = "1.0.0"
+description = "Photobooth kiosk for baseball card generation"
+requires-python = ">=3.10"
+dependencies = [
+  "customtkinter>=5.2.0",
+  "opencv-python>=4.8.0",
+  "Pillow>=10.0.0",
+  "numpy>=1.24.0",
+  "qrcode[pil]>=7.4.0",
+  "requests>=2.31.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0.0"]
+
+[project.scripts]
+photobooth-kiosk = "main:main"
