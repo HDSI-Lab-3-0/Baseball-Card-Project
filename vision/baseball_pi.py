@@ -1,12 +1,20 @@
 """
-Swing/Pitch Pose Tester — macOS development version.
+Swing/Pitch Pose Tester — Raspberry Pi 5 version (USB webcam).
 
-Quick sandbox for testing MoveNet pose analysis on your Mac webcam
-before moving to the Raspberry Pi.
+Can be run manually (keyboard) or triggered by Astro (CLI args).
 
-Controls:
-  SPACE — record a swing clip, analyze with swing metrics
-  P     — record a pitch clip, analyze with pitch metrics
+Usage:
+  Manual:   python test_swing_pi.py
+  Via Astro: python test_swing_pi.py --mode pitch --headless
+
+Setup:
+    pip install opencv-python numpy tflite-runtime
+
+Make sure model.tflite is in the same directory as this script.
+
+Manual controls (when not in headless mode):
+  SPACE — record a swing clip
+  P     — record a pitch clip
   ESC   — quit
 """
 
@@ -14,17 +22,23 @@ import cv2
 import time
 import numpy as np
 from ai_edge_litert.interpreter import Interpreter
-
+import requests
+import argparse
 
 # =========================
 # SETTINGS
 # =========================
-MODEL_PATH = "model.tflite"        # rename your file to this, or change this
-CLIP_SECONDS = 5.0                  # longer window — easier to catch the motion
+MODEL_PATH = "model.tflite"
+CLIP_SECONDS = 5.0
 MIN_KP_CONF = 0.3
 MIN_BALL_RADIUS = 15
-SHOW_BALL = True                    # flip off if green-ball noise is distracting
-SAVE_HERO_FRAME = True              # writes hero.jpg after each recording
+SHOW_BALL = True
+SAVE_HERO_FRAME = True
+ASTRO_SERVER = "http://localhost:4321"
+
+CAM_WIDTH = 640
+CAM_HEIGHT = 480
+POSE_EVERY_N_FRAMES = 1
 # =========================
 
 KEYPOINT_NAMES = [
@@ -34,7 +48,6 @@ KEYPOINT_NAMES = [
     "left_knee", "right_knee", "left_ankle", "right_ankle",
 ]
 
-# ---- Load MoveNet ----
 print("Loading MoveNet...")
 interpreter = Interpreter(model_path=MODEL_PATH)
 interpreter.allocate_tensors()
@@ -43,9 +56,6 @@ output_details = interpreter.get_output_details()
 print("MoveNet loaded.\n")
 
 
-# =========================
-# Pose + ball helpers
-# =========================
 
 def run_movenet(frame):
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -101,12 +111,7 @@ def detect_green_ball(frame):
     return (int(x), int(y)), int(radius)
 
 
-# =========================
-# Stat calculation
-# =========================
-
 def norm(raw, lo, hi):
-    """Map a raw feature to the 75-99 kid-friendly range."""
     clamped = max(lo, min(raw, hi))
     return int(75 + ((clamped - lo) / (hi - lo)) * 24)
 
@@ -123,16 +128,8 @@ def peak_wrist_velocity(pose_frames):
 
 
 def _axis_angle_range(angles_deg):
-    """Max sweep of a set of axis angles (mod 180°).
-
-    Treats angles as undirected lines — so 10° and 190° are the same axis.
-    This avoids noise from MoveNet flipping 'which hip came first'.
-    """
     if not angles_deg:
         return 0.0
-    # Double the angles so they span 0-360, then do the normal circular math.
-    # A 180° axis sweep becomes a 360° circular sweep, a 10° axis sweep → 20° circular.
-    # At the end we halve it back.
     doubled = [2 * a for a in angles_deg]
     rads = np.radians(doubled)
     xs = np.cos(rads)
@@ -145,7 +142,7 @@ def _axis_angle_range(angles_deg):
             sweep = np.degrees(np.arccos(dot))
             if sweep > max_sweep:
                 max_sweep = sweep
-    return max_sweep / 2  # halve back to axis space
+    return max_sweep / 2
 
 
 def hip_rotation_range(pose_frames):
@@ -156,6 +153,7 @@ def hip_rotation_range(pose_frames):
             angles.append(np.degrees(np.arctan2(rh[1] - lh[1], rh[0] - lh[0])))
     return _axis_angle_range(angles)
 
+
 def max_shoulder_hip_separation(pose_frames):
     peak = 0.0
     for f in pose_frames:
@@ -164,7 +162,6 @@ def max_shoulder_hip_separation(pose_frames):
         if ls and rs and lh and rh:
             sa = np.arctan2(rs[1] - ls[1], rs[0] - ls[0])
             ha = np.arctan2(rh[1] - lh[1], rh[0] - lh[0])
-            # Axis difference: double, compare on circle, halve back
             diff = np.arctan2(np.sin(2 * (sa - ha)), np.cos(2 * (sa - ha))) / 2
             peak = max(peak, abs(np.degrees(diff)))
     return peak
@@ -204,7 +201,7 @@ def peak_leg_kick(pose_frames):
             hip = kp(f, f"{side}_hip")
             knee = kp(f, f"{side}_knee")
             if hip and knee:
-                peak = max(peak, hip[1] - knee[1])  # positive = knee above hip
+                peak = max(peak, hip[1] - knee[1])
     return peak
 
 
@@ -239,18 +236,18 @@ def analyze(pose_frames, mode):
             "FORM":      norm(features["max_separation"], 5, 40),
             "STYLE":     norm(features["max_spread"], 0.05, 0.35),
         }
-    else:  # pitch
+    else:
         features = {
-            "peak_arm_extension":      peak_arm_extension(pose_frames),
-            "peak_leg_kick":           peak_leg_kick(pose_frames),
-            "hip_rotation_range":      hip_rotation_range(pose_frames),
-            "total_body_movement":     total_body_movement(pose_frames),
+            "peak_arm_extension":  peak_arm_extension(pose_frames),
+            "peak_leg_kick":       peak_leg_kick(pose_frames),
+            "hip_rotation_range":  hip_rotation_range(pose_frames),
+            "total_body_movement": total_body_movement(pose_frames),
         }
         stats = {
             "POWER":        norm(features["peak_arm_extension"], 0.2, 0.5),
-            "FORM":         norm(features["peak_leg_kick"], 0.0, 0.3),
+            "FORM":         norm(features["peak_leg_kick"], 0.0, 0.08),
             "INTIMIDATION": norm(features["hip_rotation_range"], 5, 45),
-            "HUSTLE":       norm(features["total_body_movement"], 0.5, 5.0),
+            "HUSTLE":       norm(features["total_body_movement"], 0.5, 2.0),
         }
 
     return stats, features
@@ -271,21 +268,82 @@ def pick_hero_frame(frames, pose_frames):
     return frames[best_idx], best_idx
 
 
-# =========================
-# Main loop
-# =========================
+def send_to_astro(record_mode, stats, features):
+    try:
+        res = requests.post(
+            f"{ASTRO_SERVER}/api/generate-card",
+            json={
+                "mode": record_mode,
+                "stats": stats,
+                "features": {k: float(v) for k, v in features.items()}
+            },
+            timeout=5
+        )
+        print("\nSent to Astro:", res.status_code, res.text)
+    except Exception as e:
+        print("Failed to send to Astro:", e)
 
-def main():
+
+def run_headless(mode):
+    """Run a single clip in headless mode (no window), triggered by Astro."""
+    print(f"Headless mode: recording {CLIP_SECONDS}s {mode} clip...")
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("Cannot open camera. Check macOS camera permissions for VS Code/Terminal.")
+        print("Cannot open camera.")
         return
 
-    # Mac webcams often default to 1280x720 — drop to 640x480 for speed
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, 30)
 
-    print("Camera opened.")
+    recorded_frames = []
+    recorded_poses = []
+    start = time.time()
+
+    while time.time() - start < CLIP_SECONDS:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.flip(frame, 1)
+        kps = run_movenet(frame)
+        recorded_frames.append(frame.copy())
+        recorded_poses.append(kps)
+
+    cap.release()
+
+    print(f"Captured {len(recorded_frames)} frames. Analyzing {mode}...")
+    stats, features = analyze(recorded_poses, mode)
+
+    if stats:
+        print(f"\n--- {mode.upper()} RAW FEATURES ---")
+        for k, v in features.items():
+            print(f"  {k:<24} {v:.4f}")
+        print(f"\n--- {mode.upper()} CARD STATS ---")
+        for k, v in stats.items():
+            print(f"  {k:<14} {v}")
+
+        if SAVE_HERO_FRAME:
+            hero, hero_idx = pick_hero_frame(recorded_frames, recorded_poses)
+            path = f"hero_{mode}.jpg"
+            cv2.imwrite(path, hero)
+            print(f"\nHero frame: index {hero_idx} -> {path}")
+
+        send_to_astro(mode, stats, features)
+
+
+def run_interactive():
+    """Original interactive mode with keyboard controls."""
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Cannot open camera.")
+        return
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+    print(f"Camera opened at {CAM_WIDTH}x{CAM_HEIGHT}.")
     print("Controls: SPACE = swing, P = pitch, ESC = quit")
 
     recording = False
@@ -293,8 +351,14 @@ def main():
     record_start_time = 0.0
     recorded_frames = []
     recorded_poses = []
+    last_keypoints = None
+    frame_count = 0
 
-    window_name = "Pose Tester"
+    fps_t0 = time.time()
+    fps_frames = 0
+    fps_display = 0.0
+
+    window_name = "Pose Tester (Pi)"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     while True:
@@ -302,17 +366,28 @@ def main():
         if not ret:
             break
 
-        # Mirror the frame so it feels like a mirror, not a reversed video
         frame = cv2.flip(frame, 1)
 
-        keypoints = run_movenet(frame)
-        draw_pose(frame, keypoints)
+        if frame_count % POSE_EVERY_N_FRAMES == 0:
+            last_keypoints = run_movenet(frame)
+        keypoints = last_keypoints
+        frame_count += 1
+
+        if keypoints is not None:
+            draw_pose(frame, keypoints)
 
         if SHOW_BALL:
             ball = detect_green_ball(frame)
             if ball:
                 center, radius = ball
                 cv2.circle(frame, center, radius, (0, 255, 0), 2)
+
+        fps_frames += 1
+        if fps_frames >= 30:
+            now = time.time()
+            fps_display = fps_frames / (now - fps_t0)
+            fps_t0 = now
+            fps_frames = 0
 
         if recording:
             recorded_frames.append(frame.copy())
@@ -339,19 +414,24 @@ def main():
                         path = f"hero_{record_mode}.jpg"
                         cv2.imwrite(path, hero)
                         print(f"\nHero frame: index {hero_idx} -> {path}")
+
+                    send_to_astro(record_mode, stats, features)
+
                 print("\nReady. SPACE = swing, P = pitch, ESC = quit.\n")
         else:
             cv2.putText(frame, "SPACE = swing   P = pitch   ESC = quit",
                         (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, f"{fps_display:.1f} FPS",
+                        (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
 
         cv2.imshow(window_name, frame)
 
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC
+        if key == 27:
             break
         if recording:
             continue
-        if key == 32:  # SPACE
+        if key == 32:
             record_mode = "swing"
         elif key == ord("p"):
             record_mode = "pitch"
@@ -369,4 +449,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['swing', 'pitch'], default=None,
+                        help='Recording mode (required for headless)')
+    parser.add_argument('--headless', action='store_true',
+                        help='Run a single clip without a window, then exit')
+    args = parser.parse_args()
+
+    if args.headless and args.mode:
+        run_headless(args.mode)
+    else:
+        run_interactive()

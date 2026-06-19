@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { setLatestCard, getPlayer } from '../../lib/cardStore';
 
 export const prerender = false;
 
@@ -47,28 +48,75 @@ const generateRandomStats = () => {
   } as const;
 };
 
+// Convert Pi pose stats { POWER: 87, FORM: 78, ... } into baseball card stats
+const poseStatsToCardStats = (
+  mode: string,
+  poseStats: Record<string, number>,
+  features: Record<string, number>
+): { nickname: string; position: string; stats: Record<string, string>; funFact: string } => {
+  const fmt = (n: number) => String(Math.round(n));
+
+  if (mode === 'swing') {
+    const avg = (0.2 + ((poseStats.FORM - 75) / 24) * 0.15).toFixed(3).replace(/^0/, '');
+    const ops = (0.65 + ((poseStats.BAT_SPEED - 75) / 24) * 0.35).toFixed(3);
+    return {
+      nickname: ['Lumber Lord', 'Sweet Swinger', 'The Whip', 'Bat Wizard', 'Iron Wrists'][randomInRange(0, 4)],
+      position: ['Designated Hitter', 'Power Hitter', 'Cleanup Batter', 'Switch Hitter'][randomInRange(0, 3)],
+      stats: {
+        AVG: avg,
+        HR: fmt(8 + ((poseStats.POWER - 75) / 24) * 44),
+        RBI: fmt(20 + ((poseStats.POWER - 75) / 24) * 110),
+        SB: fmt(2 + ((poseStats.STYLE - 75) / 24) * 40),
+        OPS: ops,
+        WAR: (((poseStats.FORM - 75) / 24) * 8).toFixed(1),
+      },
+      funFact: [
+        `Peak wrist speed rated ${poseStats.BAT_SPEED}/99 by scouts.`,
+        `Hip rotation so fast it bends spacetime.`,
+        `Bat speed clocked at elite tier in the lab.`,
+      ][randomInRange(0, 2)],
+    };
+  } else {
+    // pitch
+    const era = Math.max(1.5, 6.5 - ((poseStats.POWER - 75) / 24) * 5).toFixed(2);
+    const whip = Math.max(0.8, 2.0 - ((poseStats.FORM - 75) / 24) * 1.2).toFixed(2);
+    return {
+      nickname: ['The Closer', 'Heat Seeker', 'Mound Menace', 'Strikeout King', 'The Filth'][randomInRange(0, 4)],
+      position: ['Starting Pitcher', 'Ace', 'Closer', 'Power Arm'][randomInRange(0, 3)],
+      stats: {
+        ERA: era,
+        K: fmt(80 + ((poseStats.POWER - 75) / 24) * 220),
+        WHIP: whip,
+        IP: fmt(100 + ((poseStats.HUSTLE - 75) / 24) * 162),
+        WIN: fmt(5 + ((poseStats.INTIMIDATION - 75) / 24) * 20),
+        WAR: (((poseStats.POWER - 75) / 24) * 9).toFixed(1),
+      },
+      funFact: [
+        `Leg kick measured at ${(features.peak_leg_kick * 100).toFixed(0)}cm of pure terror.`,
+        `Arm extension in the 99th percentile according to the Pi.`,
+        `Intimidation factor: ${poseStats.INTIMIDATION}/99.`,
+      ][randomInRange(0, 2)],
+    };
+  }
+};
+
 const extractImageUrl = (completion: any): string | null => {
   const message = completion?.choices?.[0]?.message;
   if (!message) return null;
 
-  // Check for images array
   if (Array.isArray(message.images) && message.images.length > 0) {
     return message.images[0]?.image_url?.url ?? null;
   }
 
-  // Check content array for various image formats
   const content = message.content;
   if (Array.isArray(content)) {
     for (const part of content) {
-      // Check for native output_image type
       if (part?.type === 'output_image' && part?.image_url?.url) {
         return part.image_url.url;
       }
-      // Check for inline data URLs in standard image_url type
       if (part?.type === 'image_url' && part?.image_url?.url?.startsWith('data:')) {
         return part.image_url.url;
       }
-      // Gemini format
       if (part?.type === 'image' && part?.source?.data) {
         const mediaType = part.source.media_type || 'image/png';
         return `data:${mediaType};base64,${part.source.data}`;
@@ -76,9 +124,8 @@ const extractImageUrl = (completion: any): string | null => {
     }
   }
 
-  // Fallback: Check if the text content itself is a URL (rare but possible)
   if (typeof content === 'string' && content.startsWith('http')) {
-      return content;
+    return content;
   }
 
   return null;
@@ -160,6 +207,46 @@ export const POST: APIRoute = async ({ request }) => {
   try {
     const body = await request.json();
 
+    // ── Pi pose path ──────────────────────────────────────────────────────────
+    // Triggered when the Raspberry Pi posts { mode, stats, features }
+    if (body.mode && body.stats && body.features) {
+      const mode = body.mode as string;
+      const poseStats = body.stats as Record<string, number>;
+      const features = body.features as Record<string, number>;
+
+      const cardStats = poseStatsToCardStats(mode, poseStats, features);
+
+      // Stylize the player photo if one was captured during the kiosk flow
+      const player = getPlayer();
+      let stylizedImage: string | null = null;
+      if (player?.photo) {
+        try {
+          stylizedImage = await stylizePlayerPhoto(player.photo, player.name, player.team);
+        } catch (err) {
+          console.warn('Image stylization failed, using original:', err);
+          stylizedImage = player.photo;
+        }
+      }
+
+      setLatestCard({
+        mode,
+        stats: cardStats,
+        poseStats,
+        receivedAt: Date.now(),
+        
+        player: player 
+        ? { ...player, photo: stylizedImage ?? player.photo }
+        : { name: 'Player', team: 'Dodgers', sport: 'baseball', photo: stylizedImage },
+      });
+
+      return new Response(
+        JSON.stringify({ success: true, stats: cardStats, poseStats, mode, stylizedImage }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ── Web UI path ───────────────────────────────────────────────────────────
+    // Triggered when the browser posts { imageBase64, playerName, team }
     const team = typeof body.team === 'string' ? body.team.trim() : '';
     const playerName = typeof body.playerName === 'string' ? body.playerName.trim() : '';
     const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : '';
@@ -219,7 +306,7 @@ export const GET: APIRoute = async () => {
   return new Response(
     JSON.stringify({
       success: true,
-      message: 'Baseball Card API ready. POST with { imageBase64, playerName, team }',
+      message: 'Baseball Card API ready. POST with { imageBase64, playerName, team } or { mode, stats, features }',
     }),
     { status: 200, headers: { 'Content-Type': 'application/json' } }
   );
