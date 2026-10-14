@@ -389,3 +389,13 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* "SWING!" call while recording */
+.swing-call {
+  font-size: 6rem;
+  color: var(--gold);
+  animation: swing-call 0.6s ease-in-out infinite alternate;
+}
+@keyframes swing-call { from { transform: scale(1); } to { transform: scale(1.12); } }
+
+.btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }

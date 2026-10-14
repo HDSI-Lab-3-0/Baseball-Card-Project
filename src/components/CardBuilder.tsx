@@ -4,19 +4,48 @@ import BaseballCard from './BaseballCard';
 import Baseball from './Baseball';
 
 // ---------------------------------------------------------------------------
-// Flow: Name (1st base) → Team (2nd) → Photo (3rd) → Generating → Card (home)
+// Flow: Name (1st) → Team (2nd) → Photo (3rd) → Swing (home) → Generating → Card
+//
+// The AI portrait starts generating as soon as the photo is taken, so it runs
+// while the player swings. The swing is analyzed by vision/swing_vision.py
+// (MoveNet) through /api/analyze-swing, and its stats go on the card.
 // ---------------------------------------------------------------------------
 
-type Step = 'name' | 'team' | 'photo' | 'generating' | 'card';
+type Step = 'name' | 'team' | 'photo' | 'swing' | 'generating' | 'card';
 
 const BASES: { step: Step; label: string; base: string }[] = [
   { step: 'name', label: 'Name', base: '1st' },
   { step: 'team', label: 'Team', base: '2nd' },
   { step: 'photo', label: 'Photo', base: '3rd' },
-  { step: 'card', label: 'Card', base: 'Home' },
+  { step: 'swing', label: 'Swing', base: 'Home' },
 ];
 
-const defaultStats = {
+type CardData = {
+  nickname: string;
+  position: string;
+  stats: Record<string, string>;
+  funFact: string;
+};
+
+type SwingResult = {
+  person_detected?: boolean;
+  swing_detected: boolean;
+  message?: string;
+  metrics?: Record<string, number>;
+  scores?: Record<string, number>;
+  stats?: Record<string, string>;
+  archetype?: string;
+};
+
+type ImageJob = {
+  image: string;
+  promise: Promise<{ stylizedImage: string | null; card: CardData | null }>;
+};
+
+const SWING_SECONDS = 3;
+const SWING_FPS = 20;
+
+const defaultStats: CardData = {
   nickname: 'The Baseball King',
   position: 'Designated Viber',
   stats: { AVG: '.342', HR: '24', RBI: '89', SB: '15', OPS: '.892', WAR: '4.2' },
@@ -46,6 +75,8 @@ export default function CardBuilder() {
   const [stylizedImage, setStylizedImage] = useState<string | null>(null);
   const [generatedStats, setGeneratedStats] = useState(defaultStats);
   const [jerseyNumber, setJerseyNumber] = useState(() => randomNumber());
+  const [swing, setSwing] = useState<SwingResult | null>(null);
+  const imageJob = useRef<ImageJob | null>(null);
 
   // UI
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +111,8 @@ export default function CardBuilder() {
     setStylizedImage(null);
     setGeneratedStats(defaultStats);
     setJerseyNumber(randomNumber());
+    setSwing(null);
+    imageJob.current = null;
     setError(null);
     setShowOriginal(false);
     goTo('name');
@@ -88,30 +121,47 @@ export default function CardBuilder() {
   // -------------------------------------------------------------------------
   // Card generation
   // -------------------------------------------------------------------------
-  const generate = async () => {
-    if (!originalImage || !playerName.trim()) return;
+
+  // Start the AI portrait in the background (once per photo) so it's ready by the time
+  // the player finishes swinging.
+  const startImageJob = (image: string) => {
+    if (imageJob.current?.image === image) return;
+    const promise = fetch('/api/generate-card', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageBase64: image, team, playerName: playerName.trim() }),
+    }).then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.details || data?.error || 'Generation failed');
+      return { stylizedImage: data.stylizedImage ?? null, card: data.stats ?? null };
+    });
+    promise.catch(() => {}); // handled when the card is assembled
+    imageJob.current = { image, promise };
+  };
+
+  const photoDone = () => {
+    if (!originalImage) return;
+    startImageJob(originalImage);
+    goTo('swing');
+  };
+
+  // Combine the AI portrait with the swing stats (or the API's surprise stats if skipped)
+  const finishCard = async (swingResult: SwingResult | null) => {
+    if (!originalImage) return;
+    setSwing(swingResult);
     setError(null);
     goTo('generating');
+    startImageJob(originalImage); // no-op if already running
 
     try {
-      const response = await fetch('/api/generate-card', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: originalImage,
-          team,
-          playerName: playerName.trim(),
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || 'Generation failed');
-
-      setStylizedImage(data.stylizedImage ?? null);
-      if (data.stats) setGeneratedStats(data.stats);
+      const { stylizedImage: img, card } = await imageJob.current!.promise;
+      setStylizedImage(img);
+      setGeneratedStats(cardFromSwing(card ?? defaultStats, swingResult));
       setShowOriginal(false);
       goTo('card');
     } catch (err) {
       console.error('API error:', err);
+      imageJob.current = null;
       setError(err instanceof Error ? err.message : 'Something went wrong.');
       goTo('photo');
     }
@@ -125,7 +175,8 @@ export default function CardBuilder() {
     return () => window.clearInterval(id);
   }, [step]);
 
-  const baseIndex = step === 'generating' ? 2 : BASES.findIndex((b) => b.step === step);
+  const baseIndex =
+    step === 'generating' ? 3 : step === 'card' ? 4 : BASES.findIndex((b) => b.step === step);
 
   return (
     <div className="relative min-h-screen font-ui">
@@ -182,7 +233,14 @@ export default function CardBuilder() {
                 }}
                 error={error}
                 onBack={() => goTo('team')}
-                onNext={generate}
+                onNext={photoDone}
+              />
+            )}
+            {step === 'swing' && (
+              <SwingScreen
+                name={playerName}
+                onBack={() => goTo('photo')}
+                onDone={finishCard}
               />
             )}
             {step === 'generating' && (
@@ -198,6 +256,7 @@ export default function CardBuilder() {
                 showOriginal={showOriginal}
                 setShowOriginal={setShowOriginal}
                 stats={generatedStats}
+                swing={swing}
                 number={jerseyNumber}
                 onStartOver={startOver}
               />
@@ -230,6 +289,93 @@ function randomNumber() {
   return String(Math.floor(Math.random() * 98) + 1).padStart(2, '0');
 }
 
+// Put the MoveNet swing stats on the card; keep the AI's nickname.
+function cardFromSwing(base: CardData, swing: SwingResult | null): CardData {
+  if (!swing?.swing_detected || !swing.stats) return base;
+  const m = swing.metrics ?? {};
+  const facts = [
+    m.bat_speed_mph_est != null && `an estimated ${Math.round(m.bat_speed_mph_est)} mph bat speed`,
+    m.shoulder_turn_deg >= 10 && `${Math.round(m.shoulder_turn_deg)}° of shoulder turn`,
+  ].filter(Boolean);
+  return {
+    nickname: base.nickname,
+    position: swing.archetype || base.position,
+    stats: swing.stats,
+    funFact: facts.length ? `Clocked ${facts.join(' with ')} at the plate.` : base.funFact,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Webcam (shared by the photo and swing screens)
+// ---------------------------------------------------------------------------
+
+type CameraStatus = 'off' | 'starting' | 'on' | 'error';
+
+function useCamera(autoStart: boolean) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [status, setStatus] = useState<CameraStatus>('off');
+
+  const stop = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setStatus('off');
+  }, []);
+
+  const start = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus('error');
+      return;
+    }
+    setStatus('starting');
+    try {
+      streamRef.current = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 960 }, facingMode: 'user' },
+        audio: false,
+      });
+      setStatus('on');
+    } catch (err) {
+      console.warn('Camera unavailable:', err);
+      setStatus('error');
+    }
+  }, []);
+
+  // Start on arrival (if asked) and always release the camera on leave
+  useEffect(() => {
+    if (autoStart) start();
+    return () => stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Callback ref: hook the stream up as soon as the <video> appears
+  const attach = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    if (el && streamRef.current) {
+      el.srcObject = streamRef.current;
+      el.play().catch(() => {});
+    }
+  }, []);
+
+  return { videoRef, attach, status, start, stop };
+}
+
+// Grab the current video frame as a JPEG data URL, scaled to maxWidth
+function grabFrame(video: HTMLVideoElement, maxWidth: number, quality: number, mirror = false) {
+  if (!video.videoWidth) return null;
+  const scale = Math.min(1, maxWidth / video.videoWidth);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  if (mirror) {
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
 // ---------------------------------------------------------------------------
 // Backdrop
 // ---------------------------------------------------------------------------
@@ -257,7 +403,7 @@ const BASE_POS = [
 ];
 
 function BasePath({ index }: { index: number }) {
-  const runner = BASE_POS[Math.max(0, index)];
+  const runner = BASE_POS[Math.min(3, Math.max(0, index))];
   const diamond = (x: number, y: number, r: number) =>
     `${x},${y - r} ${x + r},${y} ${x},${y + r} ${x - r},${y}`;
 
@@ -275,7 +421,7 @@ function BasePath({ index }: { index: number }) {
           </li>
         ))}
       </ol>
-      <svg width="64" height="64" viewBox="0 0 60 60" aria-label={`Step ${index + 1} of 4`}>
+      <svg width="64" height="64" viewBox="0 0 60 60" aria-label={`Step ${Math.min(index + 1, 4)} of 4`}>
         <polygon points={diamond(30, 30, 22)} fill="rgba(31,107,53,0.6)" stroke="rgba(246,241,228,0.7)" strokeWidth="1.5" />
         {BASE_POS.map((p, i) => (
           <polygon
@@ -432,70 +578,21 @@ function PhotoScreen({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [camera, setCamera] = useState<'off' | 'starting' | 'on' | 'error'>('off');
+  const { videoRef, attach, status: camera, start: startCamera, stop: stopCamera } = useCamera(!image);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [flash, setFlash] = useState(false);
   const [dragging, setDragging] = useState(false);
 
-  const stopCamera = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    setCamera('off');
-  }, []);
-
-  const startCamera = useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCamera('error');
-      return;
-    }
-    setCamera('starting');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 960 }, facingMode: 'user' },
-        audio: false,
-      });
-      streamRef.current = stream;
-      setCamera('on');
-    } catch (err) {
-      console.warn('Camera unavailable:', err);
-      setCamera('error');
-    }
-  }, []);
-
-  // Start the camera automatically when there is no photo yet; always stop on leave
-  useEffect(() => {
-    if (!image) startCamera();
-    return () => stopCamera();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Attach the stream once the <video> is on screen
-  useEffect(() => {
-    if (camera === 'on' && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-      videoRef.current.play().catch(() => {});
-    }
-  }, [camera, image]);
-
   const capture = () => {
     const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
-    const scale = Math.min(1, 1024 / video.videoWidth);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    // Mirror so the photo matches what the person saw on screen
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (!video) return;
+    // Mirrored so the photo matches what the person saw on screen
+    const img = grabFrame(video, 1024, 0.9, true);
+    if (!img) return;
     setFlash(true);
     window.setTimeout(() => setFlash(false), 500);
-    onImage(canvas.toDataURL('image/jpeg', 0.9));
+    onImage(img);
     stopCamera();
   };
 
@@ -553,7 +650,7 @@ function PhotoScreen({
         {image ? (
           <img src={image} alt="Your photo" className="h-full w-full object-cover" />
         ) : camera === 'on' ? (
-          <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
+          <video ref={attach} muted playsInline className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-[var(--chalk-dim)]">
             <Baseball size={70} className={camera === 'starting' ? 'ball-spin fast' : 'ball-float'} />
@@ -616,8 +713,209 @@ function PhotoScreen({
         {image && (
           <>
             <button className="btn-ghost" onClick={retake}>Retake</button>
-            <button className="btn-play" onClick={onNext}>Make my card →</button>
+            <button className="btn-play" onClick={onNext}>Next: your swing →</button>
           </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Home: record the swing and measure it with MoveNet
+// ---------------------------------------------------------------------------
+
+type SwingPhase = 'ready' | 'countdown' | 'recording' | 'analyzing' | 'result' | 'error';
+
+function SwingScreen({
+  name,
+  onBack,
+  onDone,
+}: {
+  name: string;
+  onBack: () => void;
+  onDone: (swing: SwingResult | null) => void;
+}) {
+  const { videoRef, attach, status: camera, start: startCamera } = useCamera(true);
+  const [phase, setPhase] = useState<SwingPhase>('ready');
+  const [countdown, setCountdown] = useState(3);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState<SwingResult | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+  const timers = useRef<number[]>([]);
+
+  useEffect(() => () => timers.current.forEach((id) => window.clearInterval(id)), []);
+
+  const analyze = async (frames: string[], timestamps: number[]) => {
+    setPhase('analyzing');
+    try {
+      const response = await fetch('/api/analyze-swing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ frames, timestamps }),
+      });
+      const data = await response.json();
+      if (response.status === 503 || data?.error === 'tracker_offline') {
+        setOffline(true);
+        throw new Error("The swing tracker isn't running.");
+      }
+      if (!response.ok) throw new Error(data?.error || 'Swing analysis failed');
+      setResult(data);
+      setPhase('result');
+    } catch (err) {
+      setProblem(err instanceof Error ? err.message : 'Swing analysis failed');
+      setPhase('error');
+    }
+  };
+
+  const record = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const frames: string[] = [];
+    const timestamps: number[] = [];
+    const t0 = performance.now();
+    setPhase('recording');
+    setProgress(0);
+    const id = window.setInterval(() => {
+      const elapsed = performance.now() - t0;
+      const frame = grabFrame(video, 480, 0.75);
+      if (frame) {
+        frames.push(frame);
+        timestamps.push(elapsed);
+      }
+      setProgress(Math.min(1, elapsed / (SWING_SECONDS * 1000)));
+      if (elapsed >= SWING_SECONDS * 1000) {
+        window.clearInterval(id);
+        analyze(frames, timestamps);
+      }
+    }, 1000 / SWING_FPS);
+    timers.current.push(id);
+  };
+
+  const begin = () => {
+    setResult(null);
+    setProblem(null);
+    setOffline(false);
+    setPhase('countdown');
+    let n = 3;
+    setCountdown(n);
+    const id = window.setInterval(() => {
+      n -= 1;
+      if (n <= 0) {
+        window.clearInterval(id);
+        record();
+      } else {
+        setCountdown(n);
+      }
+    }, 1000);
+    timers.current.push(id);
+  };
+
+  const busy = phase === 'countdown' || phase === 'recording' || phase === 'analyzing';
+  const swung = result?.swing_detected;
+  const m = result?.metrics ?? {};
+
+  return (
+    <div className="mx-auto flex max-w-4xl flex-col items-center text-center">
+      <p className="font-script text-3xl text-[var(--gold)] sm:text-4xl">Bottom of the ninth, {name.trim()}</p>
+      <h1 className="chalk-glow font-display text-4xl uppercase tracking-wide sm:text-6xl">Take your swing</h1>
+      <p className="mt-2 text-[var(--chalk-dim)]">
+        Step back so your whole body is in view. Your swing sets the stats on your card.
+      </p>
+
+      <div className="viewfinder mt-6 aspect-[4/3] w-full max-w-xl">
+        {camera === 'on' ? (
+          <video ref={attach} muted playsInline className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-[var(--chalk-dim)]">
+            <Baseball size={70} className={camera === 'starting' ? 'ball-spin fast' : 'ball-float'} />
+            <p className="max-w-xs">
+              {camera === 'starting' ? 'Warming up the camera…' : 'No camera found. You can skip the swing.'}
+            </p>
+          </div>
+        )}
+
+        {phase === 'countdown' && (
+          <div key={countdown} className="countdown">
+            {countdown}
+          </div>
+        )}
+        {phase === 'recording' && (
+          <>
+            <div className="countdown swing-call">SWING!</div>
+            <div className="absolute inset-x-0 bottom-0 h-2 bg-black/40">
+              <div className="h-full bg-[var(--stitch)]" style={{ width: `${progress * 100}%` }} />
+            </div>
+          </>
+        )}
+        {phase === 'analyzing' && (
+          <div className="absolute inset-0 grid place-items-center bg-black/55">
+            <div className="flex flex-col items-center gap-3">
+              <Baseball size={60} className="ball-spin fast" />
+              <p className="font-display text-2xl uppercase tracking-wider">Reading your swing…</p>
+            </div>
+          </div>
+        )}
+        {phase === 'result' && result && (
+          <div className="screen-in absolute inset-0 grid place-items-center bg-black/60 p-6">
+            {swung ? (
+              <div className="flex flex-col items-center">
+                <div className="text-xs uppercase tracking-[0.3em] text-[var(--chalk-dim)]">Bat speed</div>
+                <div className="radar text-7xl">
+                  {Math.round(m.bat_speed_mph_est ?? 0)}
+                  <span className="ml-1 text-2xl">MPH</span>
+                </div>
+                <div className="headline-in mt-2 font-display text-3xl uppercase tracking-wide">{result.archetype}</div>
+                <div className="mt-4 grid grid-cols-6 gap-3 text-center">
+                  {Object.entries(result.stats ?? {}).map(([k, v]) => (
+                    <div key={k}>
+                      <div className="text-[10px] uppercase tracking-widest text-[var(--chalk-dim)]">{k}</div>
+                      <div className="font-display text-xl">{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="max-w-sm">
+                <div className="font-display text-4xl uppercase text-[var(--gold)]">Strike one!</div>
+                <p className="mt-2">{result.message}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {phase === 'error' && (
+        <div className="mt-5 w-full max-w-xl rounded-lg border border-red-500/60 bg-red-900/40 p-3 text-sm text-red-100">
+          Rain delay! {problem}
+          {offline && (
+            <span className="mt-1 block text-red-200/80">
+              Start it in a terminal with <code>python vision/swing_vision.py serve</code>, or skip for surprise stats.
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+        <button className="btn-ghost" onClick={onBack} disabled={busy}>← Back</button>
+
+        {phase === 'ready' && camera === 'on' && (
+          <button className="btn-play" onClick={begin}>⚾ I'm ready</button>
+        )}
+        {(phase === 'result' || phase === 'error') && camera === 'on' && (
+          <button className={swung ? 'btn-ghost' : 'btn-play'} onClick={begin}>
+            Swing again
+          </button>
+        )}
+        {phase === 'result' && swung && (
+          <button className="btn-play" onClick={() => onDone(result)}>Make my card →</button>
+        )}
+        {(camera === 'error' || phase === 'error' || (phase === 'result' && !swung)) && (
+          <button className="btn-ghost" onClick={() => onDone(null)}>Skip: surprise stats</button>
+        )}
+        {camera === 'error' && (
+          <button className="btn-ghost" onClick={startCamera}>Try camera</button>
         )}
       </div>
     </div>
@@ -691,6 +989,7 @@ function CardScreen({
   showOriginal,
   setShowOriginal,
   stats,
+  swing,
   number,
   onStartOver,
 }: {
@@ -701,7 +1000,8 @@ function CardScreen({
   stylizedImage: string | null;
   showOriginal: boolean;
   setShowOriginal: (v: boolean) => void;
-  stats: typeof defaultStats;
+  stats: CardData;
+  swing: SwingResult | null;
   number: string;
   onStartOver: () => void;
 }) {
@@ -776,6 +1076,24 @@ function CardScreen({
         <div className="scoreboard mt-6 w-full p-5 text-left">
           <div className="text-xs uppercase tracking-[0.3em] text-[var(--gold)]">Scouting report</div>
           <p className="mt-2 text-[var(--chalk)]">{stats.funFact}</p>
+          {swing?.swing_detected && swing.metrics && (
+            <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-white/10 pt-3 text-sm sm:grid-cols-4">
+              {[
+                ['Bat speed', `${Math.round(swing.metrics.bat_speed_mph_est)} mph`],
+                ['Shoulder turn', `${Math.round(swing.metrics.shoulder_turn_deg)}°`],
+                ['Hip turn', `${Math.round(swing.metrics.hip_turn_deg)}°`],
+                ['Swing time', `${swing.metrics.swing_time_s.toFixed(2)}s`],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-[10px] uppercase tracking-widest text-[var(--chalk-dim)]">{label}</dt>
+                  <dd className="font-display text-lg">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {!swing?.swing_detected && (
+            <p className="mt-3 text-xs uppercase tracking-widest text-[var(--chalk-dim)]">Surprise stats: no swing recorded</p>
+          )}
         </div>
 
         {stylizedImage && originalImage && (
