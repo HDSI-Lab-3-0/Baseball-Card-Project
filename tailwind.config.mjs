@@ -5,6 +5,8 @@ export default {
     extend: {
       fontFamily: {
         'display': ['Anton', 'Impact', 'sans-serif'],
+        'ui': ['Oswald', 'Arial Narrow', 'sans-serif'],
+        'script': ['Yellowtail', 'cursive'],
       },
     },
   },

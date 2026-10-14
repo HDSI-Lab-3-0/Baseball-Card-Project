@@ -33,3 +33,12 @@ photobooth-kiosk/output/
 photobooth-kiosk/.venv/
 photobooth-kiosk/dist/
 photobooth-kiosk/build/BaseballCardKiosk/
+
+# API keys and secrets
+.env*
+!.env.example
+
+# Swing Vision
+vision/models/
+vision/output/
+__pycache__/
