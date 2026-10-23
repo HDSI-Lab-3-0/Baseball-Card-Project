@@ -15,15 +15,18 @@
     "kiosk:build": "cd photobooth-kiosk && .venv/bin/pip install -q pyinstaller && .venv/bin/pyinstaller build/photobooth.spec"
   },
   "dependencies": {
-    "@astrojs/node": "^8.3.0",
-    "@astrojs/react": "^3.6.0",
-    "astro": "^4.16.0",
+    "@astrojs/node": "^11.1.9",
+    "@astrojs/react": "^7.1.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "astro": "^7.4.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@astrojs/tailwind": "^5.1.0",
-    "@types/node": "^25.0.10",
-    "tailwindcss": "^3.4.0"
+    "@types/node": "^26.6.5",
+    "tailwindcss": "^4.3.3"
+  },
+  "engines": {
+    "node": ">=24.22.1"
   }
 }
