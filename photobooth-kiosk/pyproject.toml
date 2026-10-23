@@ -2,15 +2,15 @@
 name = "baseball-card-photobooth"
 version = "1.0.0"
 description = "Photobooth kiosk for baseball card generation"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-  "customtkinter>=5.2.0",
-  "opencv-python>=4.8.0",
-  "Pillow>=10.0.0",
-  "numpy>=1.24.0",
-  "qrcode[pil]>=7.4.0",
-  "requests>=2.31.0",
-  "python-dotenv>=1.0.0",
+  "customtkinter>=5.2.0,<6",
+  "opencv-python>=4.10.0,<5",
+  "Pillow>=13.0.0",
+  "numpy>=1.24.0,<2",
+  "qrcode[pil]>=8.2",
+  "requests>=2.34.2",
+  "python-dotenv>=1.2.4",
 ]
 
 [project.optional-dependencies]
