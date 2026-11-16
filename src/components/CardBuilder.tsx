@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { teams } from '../data/teams';
 import BaseballCard from './BaseballCard';
 import Baseball from './Baseball';
+import { compareToTeam, ordinal, type MlbTeamStats } from '../lib/mlbCompare';
 
 // ---------------------------------------------------------------------------
 // Flow: Name (1st) → Team (2nd) → Photo (3rd) → Swing (home) → Generating → Card
@@ -179,7 +180,7 @@ export default function CardBuilder() {
     step === 'generating' ? 3 : step === 'card' ? 4 : BASES.findIndex((b) => b.step === step);
 
   return (
-    <div className="relative min-h-screen font-ui">
+    <div className="print-root relative min-h-screen font-ui">
       <Ballpark />
 
       {pitching && (
@@ -188,9 +189,9 @@ export default function CardBuilder() {
         </div>
       )}
 
-      <div className="relative z-10 flex min-h-screen flex-col">
+      <div className="print-root relative z-10 flex min-h-screen flex-col">
         {/* Top bar: title + base-path progress */}
-        <header className="flex items-center justify-between gap-4 px-6 pt-5 sm:px-10">
+        <header className="no-print flex items-center justify-between gap-4 px-6 pt-5 sm:px-10">
           <button
             onClick={step === 'name' ? undefined : startOver}
             className="flex items-center gap-3 text-left"
@@ -977,6 +978,77 @@ function GeneratingScreen({ name, line }: { name: string; line: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// How the card stacks up against the real hitters on that team
+// ---------------------------------------------------------------------------
+
+function MlbComparison({ team, stats }: { team: string; stats: Record<string, string> }) {
+  const [data, setData] = useState<MlbTeamStats | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    fetch(`/api/mlb-compare?team=${encodeURIComponent(team)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.hitters?.length) setData(d);
+      })
+      .catch(() => {}); // no internet: just leave the panel out
+    return () => {
+      cancelled = true;
+    };
+  }, [team]);
+
+  const comparison = useMemo(() => (data ? compareToTeam(stats, data.hitters) : null), [data, stats]);
+  if (!data || !comparison) return null;
+  const { comp, rows } = comparison;
+
+  return (
+    <div className="scoreboard screen-in mt-4 w-full p-5 text-left">
+      <div className="text-xs uppercase tracking-[0.3em] text-[var(--gold)]">
+        vs. the {data.season} {team}
+      </div>
+      <p className="mt-2 text-[var(--chalk)]">
+        You hit most like{' '}
+        <span className="font-display text-xl tracking-wide text-[var(--gold)]">{comp.name}</span>
+        {comp.position && <span className="text-[var(--chalk-dim)]"> ({comp.position})</span>}
+      </p>
+
+      <table className="mt-3 w-full border-t border-white/10 text-sm">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-widest text-[var(--chalk-dim)]">
+            <th className="py-2 text-left font-normal">Stat</th>
+            <th className="text-right font-normal">You</th>
+            <th className="text-right font-normal">{comp.lastName}</th>
+            <th className="text-right font-normal">Team best</th>
+            <th className="text-right font-normal">Your rank</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key} className="border-t border-white/5">
+              <td className="py-1.5 text-[10px] uppercase tracking-widest text-[var(--chalk-dim)]">{row.key}</td>
+              <td className="text-right font-display text-lg text-[var(--gold)]">{row.you}</td>
+              <td className="text-right font-display text-lg">{row.comp}</td>
+              <td className="text-right">
+                <span className="font-display text-lg">{row.leader}</span>
+                <span className="ml-1 text-[10px] text-[var(--chalk-dim)]">{row.leaderName}</span>
+              </td>
+              <td className={`text-right font-display text-lg ${row.rank === 1 ? 'text-[var(--gold)]' : ''}`}>
+                {ordinal(row.rank)}
+                <span className="ml-1 text-[10px] text-[var(--chalk-dim)]">of {row.of}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 text-[10px] uppercase tracking-widest text-[var(--chalk-dim)]">
+        Real {data.season} stats · hitters with 100+ plate appearances
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Home plate: the finished card
 // ---------------------------------------------------------------------------
 
@@ -1064,7 +1136,7 @@ function CardScreen({
         </div>
       </div>
 
-      <div className="stagger flex max-w-md flex-col items-center text-center lg:items-start lg:text-left">
+      <div className="no-print stagger flex max-w-md flex-col items-center text-center lg:items-start lg:text-left">
         <p className="font-script text-4xl text-[var(--gold)]">Home run!</p>
         <h1 className="headline-in chalk-glow font-display text-5xl uppercase leading-none sm:text-6xl">
           Welcome to the bigs, {name.trim()}
@@ -1096,6 +1168,8 @@ function CardScreen({
           )}
         </div>
 
+        <MlbComparison team={team} stats={stats.stats} />
+
         {stylizedImage && originalImage && (
           <div className="mt-5 flex gap-2">
             <button
@@ -1113,9 +1187,15 @@ function CardScreen({
           </div>
         )}
 
-        <button className="btn-play mt-8" onClick={onStartOver}>
-          Next batter ⚾
-        </button>
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
+          {/* Opens the browser's print dialog; the print styles in ballpark.css show only the card */}
+          <button className="btn-play" onClick={() => window.print()}>
+            🖨️ Print card
+          </button>
+          <button className="btn-ghost" onClick={onStartOver}>
+            Next batter ⚾
+          </button>
+        </div>
       </div>
     </div>
   );

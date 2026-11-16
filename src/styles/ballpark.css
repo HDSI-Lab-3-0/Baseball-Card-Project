@@ -399,3 +399,44 @@ body {
 @keyframes swing-call { from { transform: scale(1); } to { transform: scale(1.12); } }
 
 .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+/* ---------- Printing: only the finished card goes on paper ---------- */
+
+@page { margin: 0.5in; }
+
+@media print {
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  .ballpark,
+  .confetti,
+  .pitch-ball,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Don't stretch to a full screen height, so the card stays on one page */
+  .print-root {
+    min-height: 0 !important;
+  }
+  .print-root main {
+    padding: 0 !important;
+  }
+
+  /* Flatten the reveal spin and hover tilt */
+  .card-reveal,
+  .card-tilt {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+
+  /* Keep the team colors and gradients, drop the drop shadow */
+  .card-reveal,
+  .card-reveal * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    box-shadow: none !important;
+  }
+}
