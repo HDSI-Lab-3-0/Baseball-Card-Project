@@ -15,7 +15,7 @@
     "kiosk:build": "cd photobooth-kiosk && .venv/bin/pip install -q pyinstaller && .venv/bin/pyinstaller build/photobooth.spec"
   },
   "dependencies": {
-    "@astrojs/node": "^8.3.0",
+    "@astrojs/node": "^8.3.4",
     "@astrojs/react": "^3.6.0",
     "astro": "^4.16.0",
     "react": "^18.3.1",
