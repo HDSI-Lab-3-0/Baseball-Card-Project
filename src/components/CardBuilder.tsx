@@ -1078,6 +1078,17 @@ function CardScreen({
   onStartOver: () => void;
 }) {
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
+  const [printing, setPrinting] = useState(false);
+
+  // On the Pi, Chromium runs with --kiosk-printing, so window.print() sends the card
+  // straight to the default printer with no dialog. Lock the button briefly so a
+  // double-tap doesn't print two copies.
+  const printCard = () => {
+    if (printing) return;
+    setPrinting(true);
+    window.print();
+    setTimeout(() => setPrinting(false), 8000);
+  };
 
   const confetti = useMemo(
     () =>
@@ -1188,9 +1199,9 @@ function CardScreen({
         )}
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
-          {/* Opens the browser's print dialog; the print styles in ballpark.css show only the card */}
-          <button className="btn-play" onClick={() => window.print()}>
-            🖨️ Print card
+          {/* Prints the card (silently on the Pi kiosk); the print styles in ballpark.css show only the card */}
+          <button className="btn-play" onClick={printCard} disabled={printing}>
+            {printing ? '🖨️ Sent to the printer!' : '🖨️ Print card'}
           </button>
           <button className="btn-ghost" onClick={onStartOver}>
             Next batter ⚾

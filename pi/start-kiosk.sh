@@ -27,6 +27,7 @@ while [ ! -f "$STOP_FLAG" ]; do
 
   "$CHROME" \
     --kiosk \
+    --kiosk-printing \
     --user-data-dir="$PROFILE" \
     --noerrdialogs \
     --disable-infobars \
